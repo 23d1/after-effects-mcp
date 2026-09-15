@@ -15,7 +15,7 @@ const server = new McpServer(
   {
     capabilities: { tools: {} },
     instructions:
-      "Drives Adobe After Effects on macOS through ExtendScript.\n\n" +
+      "Drives Adobe After Effects (macOS and Windows) through ExtendScript.\n\n" +
       "Start with ae_status to confirm After Effects is running, then ae_list_comps / ae_comp_info to " +
       "see what you are working with. Read before you write: ae_comp_info reports each layer's " +
       "transform, effects, and which properties are keyframed.\n\n" +

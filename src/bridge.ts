@@ -1,29 +1,14 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AEError, host } from "./host.js";
+
+export { AEError } from "./host.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-
-/** After Effects registers this bundle id regardless of the year in its name. */
-const DEFAULT_BUNDLE_ID = "com.adobe.AfterEffects.application";
-
-/*
- * After Effects' DoScript/DoScriptFile AppleScript commands return a status code
- * ("0" on success, "1" if the script threw) rather than the script's value, so
- * results come back through a file the script writes instead.
- */
 const KEEP_TEMP = process.env.AE_MCP_KEEP_TEMP === "1";
-
-/*
- * Absolute paths, because a host that launches this server from Finder or
- * launchd (Claude Desktop, an installed .mcpb bundle) inherits a minimal PATH
- * that need not contain /usr/bin.
- */
-export const OSASCRIPT = "/usr/bin/osascript";
-const PGREP = "/usr/bin/pgrep";
 
 let runtimeSource: string | null = null;
 
@@ -34,83 +19,34 @@ function runtime(): string {
   return runtimeSource;
 }
 
-export class AEError extends Error {
-  readonly detail?: string;
-
-  constructor(message: string, detail?: string) {
-    super(message);
-    this.name = "AEError";
-    this.detail = detail;
-  }
-}
-
-/** The AppleScript `tell` target, overridable when several AE versions are installed. */
-function target(): string {
-  const override = process.env.AE_APP;
-  if (override) {
-    return override.startsWith("/")
-      ? `application ${JSON.stringify(override)}`
-      : `application ${JSON.stringify(override)}`;
-  }
-  return `application id ${JSON.stringify(DEFAULT_BUNDLE_ID)}`;
-}
-
-interface ExecResult {
-  code: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-}
-
-function exec(cmd: string, args: string[], input?: string, timeoutMs = 30_000): Promise<ExecResult> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeoutMs);
-
-    child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", (d) => (stderr += d.toString()));
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
-    });
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      resolve({ code: null, stdout, stderr: stderr + String(e), timedOut });
-    });
-
-    if (input !== undefined) { child.stdin.write(input); }
-    child.stdin.end();
-  });
-}
-
-export async function isRunning(): Promise<boolean> {
-  const res = await exec(PGREP, ["-x", "After Effects"], undefined, 5_000);
-  if (res.stdout.trim()) { return true; }
-  // Some builds report a versioned process name.
-  const wide = await exec(PGREP, ["-f", "Adobe After Effects [0-9]+$"], undefined, 5_000);
-  return wide.stdout.trim().length > 0;
-}
-
-export async function launch(): Promise<void> {
-  await exec(OSASCRIPT, ["-"], `tell ${target()} to activate`, 120_000);
-}
-
 /**
  * Serialises a value as an ASCII-only JS literal, so the generated .jsx file
  * stays 7-bit clean — ExtendScript reads script files without a BOM as Latin-1.
  */
 export function jsonLiteral(value: unknown): string {
   return JSON.stringify(value === undefined ? null : value).replace(
-    /[\u007f-\uffff]/g,
+    /[-￿]/g,
     (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")
   );
+}
+
+/**
+ * ExtendScript's File() accepts forward slashes on both platforms, while a
+ * Windows path embedded as a JS string would otherwise need its backslashes
+ * escaped at every layer. Normalising sidesteps that entirely.
+ */
+function asScriptPath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function isRunning(): Promise<boolean> {
+  return host().isRunning();
+}
+
+export async function launch(): Promise<void> {
+  return host().launch();
 }
 
 export interface RunOptions {
@@ -132,33 +68,33 @@ export interface RunOptions {
  */
 export async function runJsx<T = unknown>(body: string, options: RunOptions = {}): Promise<T> {
   const { undo = false, timeoutMs = 120_000, autoLaunch = false, args } = options;
+  const ae = host();
 
-  if (!(await isRunning())) {
+  if (!(await ae.isRunning())) {
     if (!autoLaunch) {
       throw new AEError(
         "After Effects isn't running. Start it (or call ae_status with launch=true) and open a project first."
       );
     }
-    await launch();
-    // AE accepts AppleEvents well before the UI settles; give it a moment.
-    await new Promise((r) => setTimeout(r, 4_000));
+    await ae.launch();
+    // After Effects accepts scripts well before the UI settles.
+    await sleep(6_000);
   }
 
   const dir = mkdtempSync(join(tmpdir(), "ae-mcp-"));
-  const scriptPath = join(dir, `${randomUUID()}.jsx`);
+  const jsxPath = join(dir, `${randomUUID()}.jsx`);
   const resultPath = join(dir, "result.json");
 
-  const inner = undo === false
-    ? `__main()`
-    : `AEMCP.undoGroup(${JSON.stringify(undo)}, __main)`;
+  const inner =
+    undo === false ? "__main()" : `AEMCP.undoGroup(${JSON.stringify(undo)}, __main)`;
 
   const preamble = [
     runtime(),
     "",
     "(function () {",
     "    function __emit(payload) {",
-    "        // Serialise before touching the file: open(\"w\") truncates, so a",
-    "        // throw inside stringify would otherwise leave an empty result.",
+    "        // Serialise before touching the file: opening for write truncates,",
+    "        // so a throw inside stringify would leave an empty result behind.",
     "        var text;",
     "        try {",
     "            text = AEMCP.stringify(payload);",
@@ -168,7 +104,7 @@ export async function runJsx<T = unknown>(body: string, options: RunOptions = {}
     "                error: 'Result could not be serialised: ' + ((serr && serr.message) ? serr.message : String(serr))",
     "            });",
     "        }",
-    `        var out = new File(${jsonLiteral(resultPath)});`,
+    `        var out = new File(${jsonLiteral(asScriptPath(resultPath))});`,
     '        out.encoding = "UTF-8";',
     '        if (!out.open("w")) { return; }',
     "        out.write(text);",
@@ -202,33 +138,30 @@ export async function runJsx<T = unknown>(body: string, options: RunOptions = {}
     "})();",
   ].join("\n");
 
-  writeFileSync(scriptPath, source, "utf8");
-
-  const applescript = `tell ${target()}\n  DoScriptFile ${JSON.stringify(scriptPath)}\nend tell`;
+  writeFileSync(jsxPath, source, "utf8");
 
   try {
-    const res = await exec(OSASCRIPT, ["-"], applescript, timeoutMs);
+    const res = await ae.dispatch(jsxPath, timeoutMs);
 
     if (res.timedOut) {
       throw new AEError(
         `After Effects did not respond within ${Math.round(timeoutMs / 1000)}s. ` +
           "It is usually blocked on a modal dialog — check the After Effects window and dismiss it.",
-        KEEP_TEMP ? scriptPath : undefined
+        KEEP_TEMP ? jsxPath : undefined
       );
     }
 
-    let payload: string;
-    try {
-      payload = readFileSync(resultPath, "utf8");
-    } catch {
-      throw new AEError(
-        "After Effects ran the script but wrote no result. This usually means script file access is " +
-          "blocked — enable 'Allow Scripts to Write Files and Access Network' in " +
-          "After Effects > Settings > Scripting & Expressions.",
-        [res.stderr.trim(), `osascript status: ${res.stdout.trim() || "(none)"}`]
+    const payload = await waitForResult(resultPath, timeoutMs);
+
+    if (payload === null) {
+      const detail =
+        [res.stderr.trim(), res.stdout.trim() ? `dispatch output: ${res.stdout.trim()}` : ""]
           .filter(Boolean)
           .join("\n")
-          .substring(0, 800)
+          .substring(0, 800) || undefined;
+      throw new AEError(
+        "After Effects ran the script but wrote no result. " + ae.noResultHint(),
+        detail
       );
     }
 
@@ -255,5 +188,33 @@ export async function runJsx<T = unknown>(body: string, options: RunOptions = {}
     if (!KEEP_TEMP) {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+}
+
+/**
+ * Waits for the script's result file.
+ *
+ * On macOS dispatch blocks until the script has finished, so this returns on
+ * the first look. On Windows `AfterFX.exe -r` hands the script to the running
+ * instance and exits immediately, so the file appears some time later — and a
+ * long-running script takes far longer than the dispatch call did.
+ *
+ * Returns null if nothing arrived before the deadline.
+ */
+async function waitForResult(path: string, timeoutMs: number): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  let delay = 20;
+
+  for (;;) {
+    if (existsSync(path)) {
+      const text = readFileSync(path, "utf8");
+      // The writer truncates before writing, so an empty file means "still
+      // being written" rather than "finished with nothing to say".
+      if (text.length > 0) { return text; }
+    }
+    if (Date.now() >= deadline) { return null; }
+
+    await sleep(delay);
+    delay = Math.min(delay * 2, 250);
   }
 }

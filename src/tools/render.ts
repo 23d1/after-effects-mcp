@@ -1,10 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { AEError, runJsx } from "../bridge.js";
+import { host } from "../host.js";
 import { compRef, defineTool, image, json } from "../mcp.js";
 
 const FRAME_DIR = join(tmpdir(), "ae-mcp-frames");
@@ -49,11 +49,10 @@ async function waitForPng(path: string, timeoutMs: number): Promise<Buffer> {
 }
 
 function downscale(path: string, maxEdge: number): void {
-  // Absolute path: see the note on OSASCRIPT in bridge.ts.
-  const res = spawnSync("/usr/bin/sips", ["-Z", String(maxEdge), path], { encoding: "utf8" });
-  if (res.status !== 0) {
+  const res = host().downscale(path, maxEdge);
+  if (!res.ok) {
     // Not fatal: the full-size frame is still on disk and still returned.
-    process.stderr.write(`[after-effects-mcp] sips resize failed: ${res.stderr}\n`);
+    process.stderr.write(`[after-effects-mcp] image resize failed: ${res.detail ?? "unknown error"}\n`);
   }
 }
 

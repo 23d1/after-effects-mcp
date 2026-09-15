@@ -19,7 +19,8 @@
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "prepare": "npm run build",
-    "bundle": "npm run build && node scripts/bundle.mjs"
+    "bundle": "npm run build && node scripts/bundle.mjs",
+    "doctor": "npm run build && node scripts/doctor.mjs"
   },
   "keywords": [
     "mcp",
@@ -37,5 +38,9 @@
     "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2"
-  }
+  },
+  "os": [
+    "darwin",
+    "win32"
+  ]
 }

@@ -1,10 +1,15 @@
 # after-effects-mcp
 
-An MCP server that lets Claude drive **Adobe After Effects** on macOS — build comps, add and
-animate layers, apply effects, write expressions, and render frames back so the model can
-actually *see* what it made.
+An MCP server that lets Claude drive **Adobe After Effects** — build comps, add and animate
+layers, apply effects, write expressions, and render frames back so the model can actually
+*see* what it made.
 
-Tested against After Effects 2026 (26.4) on macOS.
+Runs on macOS and Windows.
+
+> **Verification status.** The macOS path is tested end-to-end against After Effects 2026 (26.4).
+> The Windows path is implemented but has **not** been run against a real install yet. Run
+> `npm run doctor` on Windows to check every layer of the bridge and report exactly where it
+> breaks.
 
 ---
 
@@ -13,26 +18,47 @@ Tested against After Effects 2026 (26.4) on macOS.
 There is no network API for After Effects. This server talks to it the way AE expects:
 
 ```
-MCP client  ──stdio──▶  this server  ──osascript──▶  After Effects  ──▶  ExtendScript
+MCP client  ──stdio──▶  this server  ──dispatch──▶  After Effects  ──▶  ExtendScript
                               ▲                                              │
                               └────────────── result.json ◀───────────────────┘
 ```
 
 1. Each tool call generates an ExtendScript (`.jsx`) file: a shared runtime library plus the
    tool's own body, with arguments baked in as a JSON literal.
-2. AppleScript's `DoScriptFile` hands that file to After Effects.
-3. The script writes its result as JSON to a temp file, which the server reads back.
+2. That file is handed to After Effects — by `osascript`/`DoScriptFile` on macOS, by
+   `AfterFX.exe -r` on Windows.
+3. The script writes its result as JSON to a temp file, which the server polls for and reads.
 
 No panel or extension to install — only AE itself.
 
+**The two platforms differ in one way that matters.** macOS's `DoScriptFile` blocks until the
+script finishes. Windows' `AfterFX.exe -r` hands the script to the running instance and exits
+immediately, long before the script is done. That is why results are always waited for on the
+file rather than on the dispatch call. Everything above that line — the runtime, the tools, the
+scripts themselves — is identical on both.
+
 ## Requirements
 
-- macOS with Adobe After Effects installed
+- macOS or Windows, with Adobe After Effects installed
 - Node.js 18+
 - After Effects **running**, with a project open (`ae_status` will start it for you)
+- **Allow Scripts to Write Files and Access Network** enabled in After Effects:
+  *Settings → Scripting & Expressions* (macOS) or *Edit → Preferences → Scripting & Expressions*
+  (Windows). Results come back through a file, so nothing works without it.
 
-On first use macOS asks permission for your terminal to control After Effects. Approve it, or
-nothing will work. If you miss the prompt: **System Settings → Privacy & Security → Automation**.
+On macOS, the first call also raises a system prompt asking to let the host app control After
+Effects. Approve it, or nothing will work. If you miss it: **System Settings → Privacy & Security
+→ Automation**. This permission is granted per host application, so approving it for your
+terminal does not cover Claude Desktop, and vice versa.
+
+### Checking the setup
+
+```bash
+npm run doctor
+```
+
+Walks the chain — locating After Effects, detecting it running, dispatching a script, getting a
+result back, rendering a frame, resizing it — and says which step failed and why.
 
 ## Install
 
@@ -85,7 +111,7 @@ Or add it to a client config by hand:
 
 | Variable | Purpose |
 | --- | --- |
-| `AE_APP` | Target a specific install when several are present — an app name (`"Adobe After Effects 2025"`) or a full path. Defaults to whichever registered the `com.adobe.AfterEffects.application` bundle id. |
+| `AE_APP` | Target a specific install when several are present. **Windows:** full path to `AfterFX.exe`, or to the install folder containing `Support Files\AfterFX.exe`. **macOS:** an app name (`"Adobe After Effects 2025"`) or a full path to the `.app`. Auto-detected when unset — on Windows by scanning `%ProgramFiles%\Adobe` and taking the newest version. |
 | `AE_MCP_KEEP_TEMP` | Set to `1` to keep generated `.jsx` files for debugging instead of deleting them. |
 
 ## Tools
@@ -142,7 +168,7 @@ PNG has a transparent background. Add a solid layer if you need an opaque backdr
 
 ## Notes for anyone extending this
 
-Four things cost real debugging time. They're documented here so they don't cost it twice.
+Five things cost real debugging time. They're documented here so they don't cost it twice.
 
 **1. `DoScript` returns a status code, not your script's value.**
 AE's AppleScript dictionary declares `DoScript`/`DoScriptFile` as returning `text`, which is
@@ -162,12 +188,18 @@ Any lookup keyed by untrusted data can silently return a function. This broke JS
 serialization for every string containing a hyphen — including most font names. All such
 lookups go through `AEMCP.own()`, which checks `hasOwnProperty` first.
 
-**3. `saveFrameToPng()` is asynchronous.**
+**3. `AfterFX.exe -r` does not wait, and `DoScriptFile` does.**
+The two platforms disagree about whether handing a script to After Effects is a blocking call.
+On Windows a second `AfterFX.exe` signals the already-running instance and exits at once, so the
+dispatch returns in milliseconds while the script may run for a minute. Waiting on the result
+file rather than on the dispatch call is what makes one code path work for both.
+
+**4. `saveFrameToPng()` is asynchronous.**
 It returns before the file exists. Read it immediately and you get zero bytes, with no error
 anywhere. `waitForPng()` in `src/tools/render.ts` polls until the size settles and the PNG's
 `IEND` chunk is present.
 
-**4. ExtendScript is ES3.**
+**5. ExtendScript is ES3.**
 No `JSON`, no `let`/`const`, no arrow functions, no `Array.prototype.forEach/map/indexOf`, no
 `Object.keys`, no `String.prototype.trim`. The runtime in `src/jsx/runtime.jsx` provides a JSON
 serializer and the helpers the tools rely on.
@@ -177,15 +209,22 @@ serializer and the helpers the tools rely on.
 ```
 src/
   index.ts          MCP server; registers every tool
-  bridge.ts         script generation, osascript invocation, result marshalling
+  host.ts           per-platform plumbing: locate, detect, dispatch, resize
+  bridge.ts         script generation and result marshalling (platform-independent)
   mcp.ts            tool-definition helpers and shared argument schemas
   jsx/runtime.jsx   ExtendScript runtime injected into every call
   tools/            one module per tool group
 manifest.json       MCPB bundle manifest
 scripts/bundle.mjs  stages dist/ + production deps and packs the .mcpb
+scripts/doctor.mjs  end-to-end diagnostics
 ```
 
-System binaries (`osascript`, `sips`, `pgrep`) are invoked by absolute path. A host that
+Everything platform-specific lives behind the `Host` interface in `src/host.ts` — finding After
+Effects, detecting whether it runs, dispatching a script, and resizing a PNG (`sips` on macOS,
+`System.Drawing` via PowerShell on Windows). Adding a platform means implementing that interface
+and nothing else.
+
+macOS system binaries (`osascript`, `sips`, `pgrep`) are invoked by absolute path. A host that
 launches the server from Finder or launchd — Claude Desktop, or an installed bundle — inherits a
 minimal PATH that need not contain `/usr/bin`.
 
@@ -202,7 +241,8 @@ masks, shape operators, text animators, puppet pins — is still reachable witho
 | "After Effects isn't running" | Call `ae_status` with `launch: true`. |
 | Everything times out | AE is blocked on a modal dialog. Check its window. |
 | "ran the script but wrote no result" | Script file access is blocked — enable *Allow Scripts to Write Files and Access Network* in **After Effects → Settings → Scripting & Expressions**. |
-| "Not authorized to send Apple events" | Approve your terminal under **System Settings → Privacy & Security → Automation**. |
+| "Not authorized to send Apple events" (macOS) | Approve the host app under **System Settings → Privacy & Security → Automation**. |
+| "Could not find AfterFX.exe" (Windows) | After Effects is installed somewhere non-standard. Set `AE_APP` to the full path of `AfterFX.exe`. |
 | A font silently doesn't apply | AE wants the PostScript name. Use `ae_list_fonts` to find it. |
 
 ## License
