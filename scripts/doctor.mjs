@@ -5,7 +5,7 @@
  * Effects, detecting that it is running, dispatching a script, getting a result
  * back, and resizing an image — and reports where the chain breaks.
  */
-import { mkdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { host } from "../dist/host.js";
@@ -70,10 +70,17 @@ try {
 }
 
 /* 4 — how dispatch behaves ------------------------------------------------
- * macOS blocks inside dispatch; Windows returns immediately and the result
- * lands later. Both are fine — this just makes the behaviour visible, because
- * it is the thing most likely to differ on an untested platform.
+ * Handing a script to After Effects blocks on macOS (DoScriptFile) but is
+ * documented as returning immediately on Windows (AfterFX.exe -r). The server
+ * waits on the result file either way, so this check exists to report which
+ * behaviour actually happens rather than to gate anything.
+ *
+ * The probe sleeps inside ExtendScript so the two cases are distinguishable: a
+ * script that finishes instantly cannot tell "dispatch waited" apart from
+ * "dispatch was slower to start up than the script took to run".
  */
+
+const PROBE_SLEEP_MS = 1500;
 
 console.log("\nDispatch behaviour");
 try {
@@ -83,10 +90,10 @@ try {
   const script = join(dir, "probe.jsx");
   const marker = join(dir, "probe.done").replace(/\\/g, "/");
 
-  const { writeFileSync } = await import("node:fs");
   writeFileSync(
     script,
-    `var f = new File(${JSON.stringify(marker)});\n` +
+    `$.sleep(${PROBE_SLEEP_MS});\n` +
+      `var f = new File(${JSON.stringify(marker)});\n` +
       `f.open("w"); f.write("done"); f.close();\n`,
     "utf8"
   );
@@ -95,23 +102,21 @@ try {
   await ae.dispatch(script, 60_000);
   const dispatchMs = Date.now() - t0;
 
-  let waited = 0;
-  while (waited < 60_000) {
-    try { statSync(marker); break; } catch { /* not yet */ }
+  let markerMs = null;
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    if (existsSync(marker)) { markerMs = Date.now() - t0; break; }
     await new Promise((r) => setTimeout(r, 25));
-    waited = Date.now() - t0 - dispatchMs;
   }
 
-  let wrote = true;
-  try { statSync(marker); } catch { wrote = false; }
-
-  if (check(wrote, `script executed and wrote its marker file`)) {
-    info(`dispatch returned after ${dispatchMs}ms; marker appeared ${waited}ms later`);
-    info(
-      dispatchMs > waited
-        ? "dispatch blocks until the script finishes (expected on macOS)"
-        : "dispatch returns before the script finishes (expected on Windows) — polling is doing the work"
-    );
+  if (check(markerMs !== null, "script executed and wrote its marker file")) {
+    info(`script slept ${PROBE_SLEEP_MS}ms; dispatch returned at ${dispatchMs}ms, marker at ${markerMs}ms`);
+    // Allow slack for startup: the question is whether dispatch outlasted the sleep.
+    if (dispatchMs >= PROBE_SLEEP_MS * 0.8) {
+      info("dispatch WAITS for the script to finish");
+    } else {
+      info("dispatch RETURNS EARLY; waiting on the result file is doing the work");
+    }
   } else {
     info("After Effects did not write the marker. Check that script file access is enabled:");
     info(ae.noResultHint());

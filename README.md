@@ -31,11 +31,13 @@ MCP client  ──stdio──▶  this server  ──dispatch──▶  After Ef
 
 No panel or extension to install — only AE itself.
 
-**The two platforms differ in one way that matters.** macOS's `DoScriptFile` blocks until the
-script finishes. Windows' `AfterFX.exe -r` hands the script to the running instance and exits
-immediately, long before the script is done. That is why results are always waited for on the
-file rather than on the dispatch call. Everything above that line — the runtime, the tools, the
-scripts themselves — is identical on both.
+**Results are waited for on the file, never on the dispatch call.** Whether handing a script to
+After Effects blocks until that script finishes is not something either platform guarantees:
+macOS's `DoScriptFile` does wait (measured), while `AfterFX.exe -r` is documented as signalling
+the running instance and returning. Polling for the result file is correct under either
+behaviour, so the server does not depend on knowing which it got. `npm run doctor` reports what
+actually happens on your machine. Everything above that line — the runtime, the tools, the
+scripts themselves — is identical on both platforms.
 
 ## Requirements
 
@@ -188,11 +190,14 @@ Any lookup keyed by untrusted data can silently return a function. This broke JS
 serialization for every string containing a hyphen — including most font names. All such
 lookups go through `AEMCP.own()`, which checks `hasOwnProperty` first.
 
-**3. `AfterFX.exe -r` does not wait, and `DoScriptFile` does.**
-The two platforms disagree about whether handing a script to After Effects is a blocking call.
-On Windows a second `AfterFX.exe` signals the already-running instance and exits at once, so the
-dispatch returns in milliseconds while the script may run for a minute. Waiting on the result
-file rather than on the dispatch call is what makes one code path work for both.
+**3. Do not assume dispatch waits for the script.**
+macOS's `DoScriptFile` blocks until the script finishes; `AfterFX.exe -r` is documented as
+handing the script to the running instance and returning. Rather than encode either assumption,
+the server polls for the result file, which is correct whichever way a given host behaves.
+
+Measuring this needs care: a probe script that finishes instantly cannot distinguish "dispatch
+waited" from "dispatch took longer to start up than the script took to run". The doctor's probe
+sleeps inside ExtendScript so the two cases separate cleanly.
 
 **4. `saveFrameToPng()` is asynchronous.**
 It returns before the file exists. Read it immediately and you get zero bytes, with no error
