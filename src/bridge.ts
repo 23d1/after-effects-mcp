@@ -25,7 +25,7 @@ function runtime(): string {
  */
 export function jsonLiteral(value: unknown): string {
   return JSON.stringify(value === undefined ? null : value).replace(
-    /[-￿]/g,
+    /[\u007f-\uffff]/g,
     (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")
   );
 }
@@ -40,6 +40,26 @@ function asScriptPath(path: string): string {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Removes a call's temp directory.
+ *
+ * On Windows After Effects can still hold a handle on the .jsx it just ran —
+ * likely, since dispatch there returns before the script finishes — and
+ * deleting an open file fails with EPERM or EBUSY. Retry briefly, and never let
+ * cleanup failure escape: this runs in a `finally`, where a throw would replace
+ * a perfectly good result with an error about a temp file. A stray file in the
+ * OS temp directory is the lesser problem by far.
+ */
+function cleanupTemp(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  } catch (error) {
+    process.stderr.write(
+      `[after-effects-mcp] could not remove temp dir ${dir}: ${String(error)}\n`
+    );
+  }
+}
 
 export async function isRunning(): Promise<boolean> {
   return host().isRunning();
@@ -186,7 +206,7 @@ export async function runJsx<T = unknown>(body: string, options: RunOptions = {}
     return parsed.data as T;
   } finally {
     if (!KEEP_TEMP) {
-      rmSync(dir, { recursive: true, force: true });
+      cleanupTemp(dir);
     }
   }
 }

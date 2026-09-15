@@ -6,10 +6,9 @@ layers, apply effects, write expressions, and render frames back so the model ca
 
 Runs on macOS and Windows.
 
-> **Verification status.** The macOS path is tested end-to-end against After Effects 2026 (26.4).
-> The Windows path is implemented but has **not** been run against a real install yet. Run
-> `npm run doctor` on Windows to check every layer of the bridge and report exactly where it
-> breaks.
+> **Verification status.** Both platforms are tested end-to-end against After Effects 2026 —
+> 26.4 on macOS, 26.5 on Windows. `npm run doctor` re-checks every layer of the bridge on your
+> own machine.
 
 ---
 
@@ -31,13 +30,12 @@ MCP client  ──stdio──▶  this server  ──dispatch──▶  After Ef
 
 No panel or extension to install — only AE itself.
 
-**Results are waited for on the file, never on the dispatch call.** Whether handing a script to
-After Effects blocks until that script finishes is not something either platform guarantees:
-macOS's `DoScriptFile` does wait (measured), while `AfterFX.exe -r` is documented as signalling
-the running instance and returning. Polling for the result file is correct under either
-behaviour, so the server does not depend on knowing which it got. `npm run doctor` reports what
-actually happens on your machine. Everything above that line — the runtime, the tools, the
-scripts themselves — is identical on both platforms.
+**Results are waited for on the file, never on the dispatch call.** The two platforms genuinely
+differ here. Measured with a script that sleeps 1500ms: on macOS `DoScriptFile` returned at
+1818ms, having waited for it; on Windows `AfterFX.exe -r` returned at 376ms while the script ran
+on until 1952ms. Polling the result file is correct under either behaviour, and on Windows it is
+load-bearing — without it every call would return before After Effects had finished. Everything
+above that line — the runtime, the tools, the scripts themselves — is identical on both.
 
 ## Requirements
 
@@ -170,7 +168,7 @@ PNG has a transparent background. Add a solid layer if you need an opaque backdr
 
 ## Notes for anyone extending this
 
-Five things cost real debugging time. They're documented here so they don't cost it twice.
+Six things cost real debugging time. They're documented here so they don't cost it twice.
 
 **1. `DoScript` returns a status code, not your script's value.**
 AE's AppleScript dictionary declares `DoScript`/`DoScriptFile` as returning `text`, which is
@@ -190,21 +188,27 @@ Any lookup keyed by untrusted data can silently return a function. This broke JS
 serialization for every string containing a hyphen — including most font names. All such
 lookups go through `AEMCP.own()`, which checks `hasOwnProperty` first.
 
-**3. Do not assume dispatch waits for the script.**
-macOS's `DoScriptFile` blocks until the script finishes; `AfterFX.exe -r` is documented as
-handing the script to the running instance and returning. Rather than encode either assumption,
-the server polls for the result file, which is correct whichever way a given host behaves.
+**3. Dispatch waits on macOS and does not on Windows.**
+`DoScriptFile` blocks until the script finishes. `AfterFX.exe -r` signals the running instance
+and exits — for a 1500ms script it returned at 376ms. Waiting on the result file rather than on
+the dispatch call is what lets one code path serve both.
 
-Measuring this needs care: a probe script that finishes instantly cannot distinguish "dispatch
-waited" from "dispatch took longer to start up than the script took to run". The doctor's probe
-sleeps inside ExtendScript so the two cases separate cleanly.
+Measuring this needs care: a probe that finishes instantly cannot distinguish "dispatch waited"
+from "dispatch took longer to start up than the script took to run". The doctor's probe sleeps
+inside ExtendScript so the two separate cleanly.
 
-**4. `saveFrameToPng()` is asynchronous.**
+**4. Windows will not let you delete a file After Effects still has open.**
+Because dispatch returns early there, the temp `.jsx` is often still held when the call finishes,
+and removing its directory fails with `EPERM`. Cleanup retries and then gives up quietly — it
+runs in a `finally`, where throwing would replace a perfectly good result with an error about a
+temp file.
+
+**5. `saveFrameToPng()` is asynchronous.**
 It returns before the file exists. Read it immediately and you get zero bytes, with no error
 anywhere. `waitForPng()` in `src/tools/render.ts` polls until the size settles and the PNG's
 `IEND` chunk is present.
 
-**5. ExtendScript is ES3.**
+**6. ExtendScript is ES3.**
 No `JSON`, no `let`/`const`, no arrow functions, no `Array.prototype.forEach/map/indexOf`, no
 `Object.keys`, no `String.prototype.trim`. The runtime in `src/jsx/runtime.jsx` provides a JSON
 serializer and the helpers the tools rely on.

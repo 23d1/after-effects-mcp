@@ -11,6 +11,16 @@ import { join } from "node:path";
 import { host } from "../dist/host.js";
 import { runJsx } from "../dist/bridge.js";
 
+// After Effects may still hold a handle on files it just touched, which on
+// Windows makes deletion fail with EPERM. Retry, and never fail a check over it.
+const removeQuietly = (target) => {
+  try {
+    rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  } catch {
+    /* a leftover temp file is not worth failing a diagnostic over */
+  }
+};
+
 const pass = (m) => console.log(`  ok    ${m}`);
 const fail = (m) => console.log(`  FAIL  ${m}`);
 const info = (m) => console.log(`        ${m}`);
@@ -85,7 +95,7 @@ const PROBE_SLEEP_MS = 1500;
 console.log("\nDispatch behaviour");
 try {
   const dir = join(tmpdir(), "ae-mcp-doctor");
-  rmSync(dir, { recursive: true, force: true });
+  removeQuietly(dir);
   mkdirSync(dir, { recursive: true });
   const script = join(dir, "probe.jsx");
   const marker = join(dir, "probe.done").replace(/\\/g, "/");
@@ -121,7 +131,7 @@ try {
     info("After Effects did not write the marker. Check that script file access is enabled:");
     info(ae.noResultHint());
   }
-  rmSync(dir, { recursive: true, force: true });
+  removeQuietly(dir);
 } catch (e) {
   fail(e.message);
   failures++;
@@ -170,7 +180,7 @@ try {
     }
   }
 
-  rmSync(out, { force: true });
+  removeQuietly(out);
   await runJsx(
     `AEMCP.comp(ARGS.name).remove(); return true;`,
     { args: { name: probeComp }, undo: "doctor cleanup" }
