@@ -18,7 +18,7 @@ There is no network API for After Effects. This server talks to it the way AE ex
 
 ```
 MCP client  ──stdio──▶  this server  ──dispatch──▶  After Effects  ──▶  ExtendScript
-                              ▲                                              │
+                              ▲                                               │
                               └────────────── result.json ◀───────────────────┘
 ```
 
