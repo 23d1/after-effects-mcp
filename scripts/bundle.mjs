@@ -9,6 +9,19 @@ import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+/*
+ * npm and npx are .cmd shims on Windows. Node refuses to spawn a .cmd without
+ * a shell (it has done since the CVE-2024-27980 fix), so Windows needs both the
+ * .cmd suffix and shell: true — which in turn means arguments must be quoted.
+ */
+const IS_WINDOWS = process.platform === "win32";
+
+function runTool(tool, args, options = {}) {
+  const command = IS_WINDOWS ? `${tool}.cmd` : tool;
+  const finalArgs = IS_WINDOWS ? args.map((a) => `"${a}"`) : args;
+  return execFileSync(command, finalArgs, { shell: IS_WINDOWS, ...options });
+}
+
 const STAGE = "build/bundle";
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
@@ -48,7 +61,7 @@ writeFileSync(
 );
 
 console.log("Installing production dependencies...");
-execFileSync("npm", ["install", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"], {
+runTool("npm", ["install", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"], {
   cwd: STAGE,
   stdio: "inherit",
 });
@@ -58,4 +71,4 @@ rmSync(join(STAGE, "package-lock.json"), { force: true });
 
 const output = `build/${pkg.name}-${pkg.version}.mcpb`;
 console.log(`Packing ${output}`);
-execFileSync("npx", ["mcpb", "pack", STAGE, output], { stdio: "inherit" });
+runTool("npx", ["mcpb", "pack", STAGE, output], { stdio: "inherit" });
