@@ -47,6 +47,27 @@ Register it with Claude Code:
 claude mcp add after-effects -- node /absolute/path/to/after-effects-mcp/dist/index.js
 ```
 
+### As a Claude Desktop extension (.mcpb)
+
+Build a self-contained bundle:
+
+```bash
+npm run bundle          # -> build/after-effects-mcp-<version>.mcpb
+open build/after-effects-mcp-0.1.0.mcpb
+```
+
+Opening it hands the bundle to Claude Desktop, which shows an install dialog. The bundle carries
+its own production dependencies, so there is nothing to install alongside it and no PATH to
+configure.
+
+**The first tool call will raise a macOS prompt — "Claude wants to control After Effects".**
+It must be approved or every call fails with `Not authorized to send Apple events`. Automation
+permission is granted per host application, so approving it for your terminal does not cover
+Claude Desktop, and vice versa. If you miss the prompt: **System Settings → Privacy & Security →
+Automation**.
+
+### As a config entry
+
 Or add it to a client config by hand:
 
 ```json
@@ -160,7 +181,16 @@ src/
   mcp.ts            tool-definition helpers and shared argument schemas
   jsx/runtime.jsx   ExtendScript runtime injected into every call
   tools/            one module per tool group
+manifest.json       MCPB bundle manifest
+scripts/bundle.mjs  stages dist/ + production deps and packs the .mcpb
 ```
+
+System binaries (`osascript`, `sips`, `pgrep`) are invoked by absolute path. A host that
+launches the server from Finder or launchd — Claude Desktop, or an installed bundle — inherits a
+minimal PATH that need not contain `/usr/bin`.
+
+Bundles are unsigned by default; `npx mcpb sign` will sign one if you are distributing it
+widely.
 
 `ae_run_script` exposes the same runtime to callers, so anything the typed tools don't cover —
 masks, shape operators, text animators, puppet pins — is still reachable without changing code.

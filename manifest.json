@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/dist/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "after-effects-mcp",
+  "display_name": "After Effects",
+  "version": "0.1.0",
+  "description": "Build and animate compositions in Adobe After Effects, and render frames back to check the result.",
+  "long_description": "Drives Adobe After Effects on macOS through ExtendScript, using the AppleScript bridge that ships with After Effects — no panel or extension to install inside AE itself.\n\nCovers projects, compositions, layers, keyframes, expressions, effects and rendering, plus a raw ExtendScript escape hatch for anything the typed tools don't reach. `ae_save_frame` renders a frame and returns it as an image, so Claude can look at what it built instead of assuming an edit landed.\n\nEvery mutating tool opens its own undo group, so anything Claude does is one Cmd-Z away.\n\n**Requires After Effects to be running.** On first use macOS will ask permission for Claude to control After Effects — this must be approved or every call fails.",
+  "author": {
+    "name": "23d1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/23d1/after-effects-mcp"
+  },
+  "license": "MIT",
+  "keywords": ["after-effects", "adobe", "motion-graphics", "animation", "extendscript", "video"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "AE_APP": "${user_config.ae_app}"
+      }
+    }
+  },
+  "user_config": {
+    "ae_app": {
+      "type": "string",
+      "title": "After Effects application",
+      "description": "Only needed when several versions of After Effects are installed and you want a specific one. Use the application name (for example \"Adobe After Effects 2025\") or a full path to the .app. Leave blank to use whichever version macOS launches by default.",
+      "required": false,
+      "default": ""
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": {
+      "node": ">=18"
+    }
+  },
+  "tools_generated": true,
+  "tools": [
+    { "name": "ae_status", "description": "Check whether After Effects is running and report its version and open project." },
+    { "name": "ae_project_info", "description": "List everything in the Project panel with ids." },
+    { "name": "ae_open_project", "description": "Open an .aep file or start a new empty project." },
+    { "name": "ae_save_project", "description": "Save the current project, optionally to a new path." },
+    { "name": "ae_import", "description": "Import footage, stills, audio or image sequences." },
+    { "name": "ae_undo", "description": "Undo the last operation." },
+    { "name": "ae_list_comps", "description": "List every composition in the project." },
+    { "name": "ae_comp_info", "description": "Inspect a composition's settings and layer stack." },
+    { "name": "ae_create_comp", "description": "Create a new composition." },
+    { "name": "ae_set_comp_settings", "description": "Change a composition's size, duration, frame rate or work area." },
+    { "name": "ae_set_time", "description": "Move the playhead." },
+    { "name": "ae_add_layer", "description": "Add a text, solid, shape, null, adjustment, camera, light or footage layer." },
+    { "name": "ae_set_layer", "description": "Set a layer's name, transform, timing, parenting, blend mode or switches." },
+    { "name": "ae_set_text", "description": "Set the content and character styling of a text layer." },
+    { "name": "ae_layer_op", "description": "Duplicate, delete, reorder, precompose or split layers." },
+    { "name": "ae_select", "description": "Change the timeline selection." },
+    { "name": "ae_set_keyframes", "description": "Animate any property with keyframes and easing." },
+    { "name": "ae_set_property", "description": "Set a static value on any property by path." },
+    { "name": "ae_get_property", "description": "Read a property's value, keyframes and expression." },
+    { "name": "ae_set_expression", "description": "Attach or clear an expression on a property." },
+    { "name": "ae_remove_keyframes", "description": "Delete keyframes from a property." },
+    { "name": "ae_search_effects", "description": "Search the effects installed in After Effects." },
+    { "name": "ae_apply_effect", "description": "Apply an effect and set its parameters." },
+    { "name": "ae_list_effect_params", "description": "List every parameter of an effect on a layer." },
+    { "name": "ae_remove_effect", "description": "Remove or disable an effect." },
+    { "name": "ae_save_frame", "description": "Render a single frame to PNG and return it as an image." },
+    { "name": "ae_render", "description": "Render a composition through the render queue." },
+    { "name": "ae_render_templates", "description": "List available render settings and output module templates." },
+    { "name": "ae_run_script", "description": "Run arbitrary ExtendScript inside After Effects." },
+    { "name": "ae_exec_menu", "description": "Execute an After Effects menu command by name." },
+    { "name": "ae_list_fonts", "description": "List available fonts with their PostScript names." }
+  ]
+}

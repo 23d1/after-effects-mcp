@@ -49,7 +49,8 @@ async function waitForPng(path: string, timeoutMs: number): Promise<Buffer> {
 }
 
 function downscale(path: string, maxEdge: number): void {
-  const res = spawnSync("sips", ["-Z", String(maxEdge), path], { encoding: "utf8" });
+  // Absolute path: see the note on OSASCRIPT in bridge.ts.
+  const res = spawnSync("/usr/bin/sips", ["-Z", String(maxEdge), path], { encoding: "utf8" });
   if (res.status !== 0) {
     // Not fatal: the full-size frame is still on disk and still returned.
     process.stderr.write(`[after-effects-mcp] sips resize failed: ${res.stderr}\n`);

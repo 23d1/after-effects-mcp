@@ -17,6 +17,14 @@ const DEFAULT_BUNDLE_ID = "com.adobe.AfterEffects.application";
  */
 const KEEP_TEMP = process.env.AE_MCP_KEEP_TEMP === "1";
 
+/*
+ * Absolute paths, because a host that launches this server from Finder or
+ * launchd (Claude Desktop, an installed .mcpb bundle) inherits a minimal PATH
+ * that need not contain /usr/bin.
+ */
+export const OSASCRIPT = "/usr/bin/osascript";
+const PGREP = "/usr/bin/pgrep";
+
 let runtimeSource: string | null = null;
 
 function runtime(): string {
@@ -83,15 +91,15 @@ function exec(cmd: string, args: string[], input?: string, timeoutMs = 30_000): 
 }
 
 export async function isRunning(): Promise<boolean> {
-  const res = await exec("pgrep", ["-x", "After Effects"], undefined, 5_000);
+  const res = await exec(PGREP, ["-x", "After Effects"], undefined, 5_000);
   if (res.stdout.trim()) { return true; }
   // Some builds report a versioned process name.
-  const wide = await exec("pgrep", ["-f", "Adobe After Effects [0-9]+$"], undefined, 5_000);
+  const wide = await exec(PGREP, ["-f", "Adobe After Effects [0-9]+$"], undefined, 5_000);
   return wide.stdout.trim().length > 0;
 }
 
 export async function launch(): Promise<void> {
-  await exec("osascript", ["-"], `tell ${target()} to activate`, 120_000);
+  await exec(OSASCRIPT, ["-"], `tell ${target()} to activate`, 120_000);
 }
 
 /**
@@ -199,7 +207,7 @@ export async function runJsx<T = unknown>(body: string, options: RunOptions = {}
   const applescript = `tell ${target()}\n  DoScriptFile ${JSON.stringify(scriptPath)}\nend tell`;
 
   try {
-    const res = await exec("osascript", ["-"], applescript, timeoutMs);
+    const res = await exec(OSASCRIPT, ["-"], applescript, timeoutMs);
 
     if (res.timedOut) {
       throw new AEError(

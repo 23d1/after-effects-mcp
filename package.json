@@ -8,7 +8,8 @@
   },
   "main": "dist/index.js",
   "files": [
-    "dist"
+    "dist",
+    "manifest.json"
   ],
   "engines": {
     "node": ">=18"
@@ -17,15 +18,23 @@
     "build": "tsc && node scripts/copy-jsx.mjs && chmod +x dist/index.js",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "bundle": "npm run build && node scripts/bundle.mjs"
   },
-  "keywords": ["mcp", "after-effects", "extendscript", "adobe", "motion-graphics"],
+  "keywords": [
+    "mcp",
+    "after-effects",
+    "extendscript",
+    "adobe",
+    "motion-graphics"
+  ],
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2"
   }
