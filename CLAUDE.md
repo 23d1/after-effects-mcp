@@ -58,6 +58,16 @@ hyphen, which is most font names.
 `AfterFX.exe -r` returns early — measured at 376ms for a script that ran 1952ms. Always wait on
 the result file. `saveFrameToPng()` has the same shape: it returns before the PNG is on disk.
 
+**A modal dialog hangs the bridge, not just the call.** Nobody is there to click it, so the call
+burns its whole timeout and everything queued behind it waits. Any tool that writes a file or
+swaps the project must settle the question in advance instead of letting AE prompt — see
+`overwrite` on `ae_render` and `discardChanges` on `ae_open_project`. Fail fast with an explicit
+opt-in; never let the symptom be a hang.
+
+**Never let two scripts into After Effects at once.** AE runs one at a time, and overlapping
+calls do not queue — they lose one script and run another twice, silently. `runJsx` serialises
+every call through a queue in `bridge.ts`. Don't add a path that dispatches around it.
+
 **Windows holds file locks.** Deleting a file After Effects still has open fails with `EPERM`.
 Cleanup retries and then gives up quietly. Never let cleanup throw — it runs in a `finally`, where
 a throw replaces a good result with an error about a temp file.

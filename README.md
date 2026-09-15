@@ -177,7 +177,7 @@ PNG has a transparent background. Add a solid layer if you need an opaque backdr
 
 ## Notes for anyone extending this
 
-Six things cost real debugging time. They're documented here so they don't cost it twice.
+Nine things cost real debugging time. They're documented here so they don't cost it twice.
 
 **1. `DoScript` returns a status code, not your script's value.**
 AE's AppleScript dictionary declares `DoScript`/`DoScriptFile` as returning `text`, which is
@@ -206,18 +206,45 @@ Measuring this needs care: a probe that finishes instantly cannot distinguish "d
 from "dispatch took longer to start up than the script took to run". The doctor's probe sleeps
 inside ExtendScript so the two separate cleanly.
 
-**4. Windows will not let you delete a file After Effects still has open.**
+**4. Two scripts at once corrupts the project, quietly.**
+After Effects runs one script at a time, and nothing in the dispatch path enforces it. MCP clients
+are free to issue tool calls in parallel, so overlapping calls are reachable from ordinary use.
+Four concurrent `ae_add_layer` calls for C1..C4 left a comp containing C2, C3 and *two* C4s, with
+C1 gone — while two of the four callers blocked for the full timeout and then blamed file
+permissions. A dropped script and a duplicated one are both silent; the damage shows up later as
+a project that doesn't match what was asked for. `runJsx` therefore funnels every call through a
+queue in `src/bridge.ts`, and the timeout starts when a call's turn does, so waiting in line is
+not charged against its own budget.
+
+**5. A modal dialog stops everything, and ordinary operations raise them.**
+After Effects runs scripts on the thread its UI blocks, so any modal wins: the bridge waits on a
+result file that will never appear, the call burns its whole timeout, and every queued call behind
+it waits too. Nobody is there to click. Two everyday operations raise one, so both are settled in
+advance rather than left to prompt: rendering over an existing file ("already exists. Overwrite?")
+and opening a project while the current one has unsaved changes ("Save changes before closing?").
+Each now takes an explicit opt-in (`overwrite`, `discardChanges`) and otherwise fails fast with a
+message saying so. `ae_save_project` and `ae_save_frame` were checked too — they overwrite
+silently and need no such guard. Anything new that writes a file or swaps the project deserves the
+same check, because the symptom is a hang rather than an error.
+
+**6. Windows will not let you delete a file After Effects still has open.**
 Because dispatch returns early there, the temp `.jsx` is often still held when the call finishes,
 and removing its directory fails with `EPERM`. Cleanup retries and then gives up quietly — it
 runs in a `finally`, where throwing would replace a perfectly good result with an error about a
 temp file.
 
-**5. `saveFrameToPng()` is asynchronous.**
+**7. `saveFrameToPng()` is asynchronous.**
 It returns before the file exists. Read it immediately and you get zero bytes, with no error
 anywhere. `waitForPng()` in `src/tools/render.ts` polls until the size settles and the PNG's
 `IEND` chunk is present.
 
-**6. ExtendScript is ES3.**
+**8. `app.fonts.allFonts` is a list of families, not of fonts.**
+Each element is an *array* of that family's faces, so `allFonts[i].postScriptName` is `undefined`
+rather than an error — every font serialised as `{}` and every query matched nothing, while the
+count still looked plausible (359 "fonts" that were really families holding 1384 faces). Reach
+the face through the inner array, and treat the count accordingly.
+
+**9. ExtendScript is ES3.**
 No `JSON`, no `let`/`const`, no arrow functions, no `Array.prototype.forEach/map/indexOf`, no
 `Object.keys`, no `String.prototype.trim`. The runtime in `src/jsx/runtime.jsx` provides a JSON
 serializer and the helpers the tools rely on.

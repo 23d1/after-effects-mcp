@@ -81,12 +81,47 @@ export interface RunOptions {
 }
 
 /**
+ * Serialises calls into After Effects.
+ *
+ * AE runs one script at a time, and nothing in the dispatch path enforces that.
+ * Letting calls overlap does not merely queue them badly — it corrupts state.
+ * Measured with four concurrent ae_add_layer calls (C1..C4): the comp ended up
+ * with C2, C3 and *two* C4s, C1 having vanished, while two of the four callers
+ * blocked for the full timeout and then reported "wrote no result". A dropped
+ * script and a duplicated one are both silent, so the damage surfaces later as
+ * a project that simply doesn't match what was asked for.
+ *
+ * MCP clients are free to issue tool calls in parallel, so this is reachable
+ * from ordinary use rather than being a stress-test artifact. Every call takes
+ * its turn; the timeout starts when the turn does, so queue time is not charged
+ * against the script's own budget.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+
+/** Whether any call has come back, which rules out a setup problem. */
+let everSucceeded = false;
+
+function serialize<T>(work: () => Promise<T>): Promise<T> {
+  // Run regardless of whether the previous call resolved or rejected.
+  const result = queue.then(work, work);
+  queue = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
+/**
  * Runs an ExtendScript snippet inside After Effects and returns its value.
  *
  * `body` is a function body: use `return <value>` to send data back. Anything
  * JSON-serialisable works; `AEMCP` helpers are already in scope.
  */
 export async function runJsx<T = unknown>(body: string, options: RunOptions = {}): Promise<T> {
+  return serialize(() => runJsxExclusive<T>(body, options));
+}
+
+async function runJsxExclusive<T>(body: string, options: RunOptions): Promise<T> {
   const { undo = false, timeoutMs = 120_000, autoLaunch = false, args } = options;
   const ae = host();
 
@@ -180,10 +215,23 @@ export async function runJsx<T = unknown>(body: string, options: RunOptions = {}
           .join("\n")
           .substring(0, 800) || undefined;
       throw new AEError(
-        "After Effects ran the script but wrote no result. " + ae.noResultHint(),
+        // Once a call has succeeded, scripting and file access are demonstrably
+        // configured, so repeating the permissions advice sends the reader to
+        // the wrong place — the real cause is nearly always a modal dialog
+        // holding the one thread that runs scripts.
+        everSucceeded
+          ? "After Effects stopped responding to scripts. It is almost certainly blocked on a " +
+              "modal dialog — a warning, a save prompt, or a script error window waiting for a " +
+              "click. Bring After Effects to the front and dismiss it. (An earlier call in this " +
+              "session worked, so scripting and file access are already configured correctly.)"
+          : "After Effects ran the script but wrote no result. " + ae.noResultHint(),
         detail
       );
     }
+
+    // A payload of any kind proves After Effects ran the script and was allowed
+    // to write the result file, even if the script itself then threw.
+    everSucceeded = true;
 
     let parsed: { ok: boolean; data?: T; error?: string; line?: number | null };
     try {

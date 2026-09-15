@@ -16,9 +16,16 @@ export function register(server: McpServer): void {
         "The full AE scripting API is available (`app`, `app.project`, ...), plus the `AEMCP` helpers " +
         "used by this server: AEMCP.comp(ref), AEMCP.layer(comp, ref), AEMCP.prop(root, path), " +
         "AEMCP.color(hex), AEMCP.time(comp, t), AEMCP.serializeLayer(layer), AEMCP.setKeys(prop, comp, keys, opts).\n\n" +
+        "Pass `args` to hand data to the script: it arrives as the `ARGS` variable (`null` when " +
+        "omitted). Prefer that over pasting values into the source — it keeps quoting and non-ASCII " +
+        "text correct.\n\n" +
         "Remember: this is ES3. No JSON, no arrow functions, no let/const, no Array.forEach.",
       inputSchema: {
         script: z.string().describe("ExtendScript source. Use `return` to produce a result."),
+        args: z
+          .unknown()
+          .optional()
+          .describe("Any JSON value, available to the script as `ARGS`."),
         undoLabel: z
           .string()
           .optional()
@@ -29,6 +36,7 @@ export function register(server: McpServer): void {
     async (args) =>
       json(
         await runJsx(args.script, {
+          args: args.args,
           undo: args.undoLabel ?? false,
           timeoutMs: (args.timeoutSeconds ?? 120) * 1000,
         })
@@ -82,24 +90,47 @@ export function register(server: McpServer): void {
           if (!app.fonts) {
               AEMCP.err('This version of After Effects does not expose the font list to scripting.');
           }
+          // allFonts yields one entry per font FAMILY, and each entry is an array
+          // of that family's faces. Indexing it directly gives the array, whose
+          // postScriptName is undefined — every font serialised as {} and every
+          // query matched nothing. Accept a bare face too, in case a build hands
+          // one back directly.
           var all = app.fonts.allFonts;
           var query = ARGS.query ? ARGS.query.toLowerCase() : null;
           var limit = ARGS.limit || 80;
           var hits = [];
+          var total = 0;
 
-          for (var i = 0; i < all.length && hits.length < limit; i++) {
-              var font = all[i];
-              if (query) {
-                  var haystack = (font.familyName + ' ' + font.styleName + ' ' + font.postScriptName).toLowerCase();
-                  if (haystack.indexOf(query) === -1) { continue; }
+          for (var i = 0; i < all.length; i++) {
+              var entry = all[i];
+              var faces;
+              if (entry && entry.postScriptName !== undefined) {
+                  faces = [entry];
+              } else if (entry && typeof entry.length === 'number') {
+                  faces = entry;
+              } else {
+                  continue;
               }
-              hits.push({
-                  postScriptName: font.postScriptName,
-                  family: font.familyName,
-                  style: font.styleName
-              });
+
+              for (var j = 0; j < faces.length; j++) {
+                  var font = faces[j];
+                  if (!font || font.postScriptName === undefined) { continue; }
+                  // Counted before the limit check, so 'total' stays honest.
+                  total++;
+                  if (hits.length >= limit) { continue; }
+                  if (query) {
+                      var haystack = (font.familyName + ' ' + font.styleName + ' ' +
+                                      font.postScriptName).toLowerCase();
+                      if (haystack.indexOf(query) === -1) { continue; }
+                  }
+                  hits.push({
+                      postScriptName: font.postScriptName,
+                      family: font.familyName,
+                      style: font.styleName
+                  });
+              }
           }
-          return { total: all.length, shown: hits.length, fonts: hits };
+          return { total: total, families: all.length, shown: hits.length, fonts: hits };
           `,
           { args }
         )

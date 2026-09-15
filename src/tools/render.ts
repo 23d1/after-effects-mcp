@@ -173,6 +173,13 @@ export function register(server: McpServer): void {
           .describe("Output module template name, e.g. 'H.264 - Match Render Settings - 15 Mbps'. Omit for the default."),
         start: z.number().optional().describe("Start time in seconds. Omit for the work area start."),
         end: z.number().optional().describe("End time in seconds. Omit for the work area end."),
+        overwrite: z
+          .boolean()
+          .optional()
+          .describe(
+            "Replace outputPath if a file is already there. Default: false, which fails with a clear " +
+              "error instead — After Effects would otherwise block on a modal overwrite prompt."
+          ),
         queueOnly: z
           .boolean()
           .optional()
@@ -206,7 +213,29 @@ export function register(server: McpServer): void {
           output.file = new File(ARGS.outputPath);
 
           if (ARGS.queueOnly) {
+              // A human presses Render here, so After Effects can prompt them
+              // about an existing file the way it normally would.
               return { queued: true, comp: comp.name, queueIndex: item.index, outputPath: output.file.fsName };
+          }
+
+          // An existing target makes After Effects raise a modal "already exists.
+          // Overwrite?" prompt, which blocks the bridge until somebody clicks it —
+          // and re-rendering to the same path is completely ordinary. Settle it
+          // here instead. The output module may have changed the extension, so
+          // test the file AE actually landed on, not the path we were handed.
+          var target = output.file;
+          if (target.exists) {
+              if (!ARGS.overwrite) {
+                  item.remove();
+                  AEMCP.err('"' + target.fsName + '" already exists. Pass overwrite: true to replace it, ' +
+                            'or render to a different outputPath. (Left alone, After Effects would stop ' +
+                            'and wait for someone to answer an overwrite prompt.)');
+              }
+              if (!target.remove()) {
+                  item.remove();
+                  AEMCP.err('Could not replace "' + target.fsName + '" — it may be open in another ' +
+                            'application. Close it, or render to a different outputPath.');
+              }
           }
 
           app.project.renderQueue.render();

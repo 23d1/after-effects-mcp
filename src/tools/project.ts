@@ -114,26 +114,49 @@ export function register(server: McpServer): void {
     {
       title: "Open or create a project",
       description:
-        "Open an .aep file, or start a new empty project. Unsaved changes in the current project are " +
-        "kept — After Effects will prompt if it needs to.",
+        "Open an .aep file, or start a new empty project.\n\n" +
+        "Fails if the current project has unsaved changes, rather than discarding someone's work: " +
+        "save it first with ae_save_project, or pass discardChanges to throw it away deliberately.",
       inputSchema: {
         path: z
           .string()
           .optional()
           .describe("Absolute path to an .aep file. Omit to create a new empty project."),
+        discardChanges: z
+          .boolean()
+          .optional()
+          .describe(
+            "Throw away unsaved changes in the current project. Default: false, which fails instead."
+          ),
       },
     },
     async (args) =>
       json(
         await runJsx(
           `
+          var file = null;
           if (ARGS.path) {
-              var file = new File(ARGS.path);
+              file = new File(ARGS.path);
               if (!file.exists) { AEMCP.err('No such file: ' + ARGS.path); }
-              app.open(file);
-          } else {
-              app.newProject();
           }
+
+          /*
+           * Replacing a modified project makes After Effects raise a modal
+           * "Save changes before closing?" prompt. Nobody is there to answer it,
+           * so the bridge would wait on the result file until it timed out while
+           * After Effects sat blocked. Decide it here instead: closing with
+           * DO_NOT_SAVE_CHANGES first means the prompt never appears.
+           */
+          if (app.project && app.project.dirty) {
+              if (!ARGS.discardChanges) {
+                  AEMCP.err('The current project has unsaved changes. Save it with ae_save_project ' +
+                            'first, or pass discardChanges: true to discard them. (Left alone, After ' +
+                            'Effects would stop and wait for someone to answer a save prompt.)');
+              }
+              app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES);
+          }
+
+          if (file) { app.open(file); } else { app.newProject(); }
           return {
               file: app.project.file ? app.project.file.fsName : null,
               numItems: app.project.numItems
