@@ -67,11 +67,20 @@ npm install
 npm run build
 ```
 
-Register it with Claude Code:
+Register it with Claude Code. Use `--scope user` so the tools are available from any directory,
+not only this repo — you will normally want them where your actual video projects live, not where
+the server's source happens to sit:
 
 ```bash
-claude mcp add after-effects -- node /absolute/path/to/after-effects-mcp/dist/index.js
+# macOS
+claude mcp add --scope user after-effects -- node /path/to/after-effects-mcp/dist/index.js
+
+# Windows
+claude mcp add --scope user after-effects -- node C:\path\to\after-effects-mcp\dist\index.js
 ```
+
+The path must be absolute, and must keep existing — `dist/` is gitignored, so a fresh clone needs
+`npm install && npm run build` before that path resolves. Check with `claude mcp list`.
 
 ### As a Claude Desktop extension (.mcpb)
 
