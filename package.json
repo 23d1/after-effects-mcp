@@ -1,0 +1,32 @@
+{
+  "name": "after-effects-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that drives Adobe After Effects via ExtendScript over the AppleScript bridge.",
+  "type": "module",
+  "bin": {
+    "after-effects-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/copy-jsx.mjs && chmod +x dist/index.js",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "prepare": "npm run build"
+  },
+  "keywords": ["mcp", "after-effects", "extendscript", "adobe", "motion-graphics"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
